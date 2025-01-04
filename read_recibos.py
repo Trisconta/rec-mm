@@ -4,10 +4,12 @@
 
 import sys
 import os.path
-#import openpyxl
-#from openpyxl.utils import get_column_letter
+import openpyxl
+from openpyxl.utils import get_column_letter
 sys.path.append(os.path.join(os.path.dirname(__file__), "src", "packages"))
 from receipt.config import Config
+
+DEBUG = 1
 
 NOW_YEAR = 2025
 
@@ -67,10 +69,10 @@ def main():
         EAST_2,
         SOUTH_2,
     )
-    hsh = build_hash(tups, cfg)
-    print("Debug:")
-    for key in hsh: print(key, hsh[key], end="\n\n")
-    #read_wbk(fname, tups)
+    myhash = build_hash(tups, cfg)
+    dump_hash(myhash, "ONE")
+    dump_hash(myhash, "TWO")
+    read_wbk(fname, myhash)
 
 
 def coluna(num):
@@ -81,7 +83,7 @@ def coluna(num):
         astr = (chr(ord("A") + num - 1)) if 0 < num <= 26 else "zz"
     return astr
 
-def read_wbk(fname, hsh):
+def read_wbk(fname, myhash):
     wbk = openpyxl.open(fname, data_only=True)
     dct = {
         "Workbook": wbk,
@@ -90,12 +92,29 @@ def read_wbk(fname, hsh):
     for s_name in wbk.sheetnames:
         page = wbk[s_name]
         dct["Sheets"].append(page)
+    # Check consistency
+    is_ok = check_page(myhash, dct["Sheets"][0])
+    assert is_ok, "check_page()"
     return wbk, dct
 
 def build_hash(tups, cfg):
     hsh = {}
+    hsh = build_west_east(tups, cfg)
+    two = build_north_south(tups, cfg)
+    fail = False
+    myhash = {
+        "ONE": hsh,
+        "TWO": two,
+        "msg": [not fail, "Fail" if fail else "OK"],
+    }
+    return myhash
+
+def build_west_east(tups, cfg):
+    """ Build horizontal, i.e. west-to-east.
+    January is FIELDS_1
+    """
     fields, east, south = tups
-    # January is FIELDS_1
+    hsh = {}
     key = sorted(east)[0]
     diff = ord(east[key][0]) - ord(key[0])
     cnt = 1
@@ -105,10 +124,14 @@ def build_hash(tups, cfg):
             new = coluna(ord(key[0]) - ord("A") + cnt) + key[1:]
             tup = fields[key]
             fld, data, data_type = tup
+            there = data
             if fld == "month":
                 data = MONTHS[mth]
             elif fld == "year":
                 data = NOW_YEAR
+            elif fld == "floor":
+                what = 1
+                assert data == what, f"month={mth}, {repr(data)} vs {repr(what)}"
             elif fld == "designation":
                 data = cfg.get_str("DESIGN")
             elif fld == "nif":
@@ -117,14 +140,99 @@ def build_hash(tups, cfg):
                 data = cfg.get_str("IBAN")
             elif fld == "mail":
                 what = cfg.get_str("MAIL")
-                assert data == what, f"mth={ mth}, {repr(data)} vs {repr(what)}"
-            item = [fld, data, data_type]
+                assert data == what, f"month={mth}, {repr(data)} vs {repr(what)}"
             if mth == 1:
-                hsh[mth][key] = item
+                item = [key, fld, data, data_type]
             else:
-                hsh[mth][new] = item
-                
+                item = [new, fld, data, data_type]
+            assert fld not in hsh[mth], f"month={mth}: Dup field: {fld}"
+            hsh[mth][fld] = item
         cnt += diff
     return hsh
+
+def build_north_south(tups, cfg):
+    """ Build vertical, i.e. north to south.
+    """
+    fields, east, south = tups
+    hsh = {}
+    key = sorted(east)[0]
+    diff = ord(east[key][0]) - ord(key[0])
+    cnt = 1
+    for mth in MONTHS:
+        hsh[mth] = {}
+        for key in fields:
+            new = str(int(key[1:]) + cnt)
+            tup = fields[key]
+            fld, data, data_type = tup
+            there = data
+            if fld == "month":
+                data = MONTHS[mth]
+            elif fld == "year":
+                data = NOW_YEAR
+            elif fld == "floor":
+                what = 1
+                assert data == what, f"month={mth}, {repr(data)} vs {repr(what)}"
+            elif fld == "designation":
+                data = cfg.get_str("DESIGN")
+            elif fld == "nif":
+                data = cfg.get_str("NIF")
+            elif fld == "iban":
+                data = cfg.get_str("IBAN")
+            elif fld == "mail":
+                what = cfg.get_str("MAIL")
+                assert data == what, f"month={mth}, {repr(data)} vs {repr(what)}"
+            if mth == 1:
+                item = [key, fld, data, data_type]
+            else:
+                item = [new, fld, data, data_type]
+            assert fld not in hsh[mth], f"month={mth}: Dup field: {fld}"
+            hsh[mth][fld] = item
+        cnt += diff
+    return hsh
+
+def check_page(myhash, page):
+    """ Check consistency. """
+    hsh = myhash["ONE"]
+    fail = False
+    for mth in MONTHS:
+        print("Checking month:", hsh[mth])
+        tup = hsh[mth]["month"]
+        cord = tup[0]
+        aval = tup[2]
+        if mth == 3:
+            continue
+        assert page[cord].value == aval, f"mth={mth}, {repr(page[cord].value)} != {repr(aval)}"
+    tip = {}
+    for key in sorted(hsh[1]):
+        if key == "month":
+            continue
+        tip[key] = page[hsh[1][key][0]].value
+    for mth in sorted(hsh):
+        if mth == 1:
+            continue
+        # All fields (except month) must be the same to the first (month), i.e. January
+        for key in sorted(hsh[mth]):
+            value = page[hsh[mth][key][0]].value
+            if key not in tip:
+                continue
+            if tip[key] != value:
+                fail = True
+                print(
+                    ":::", mth, key, not fail, "TIP vs value:",
+                    repr(tip[key]), repr(value)
+                )
+    return not fail
+
+def dump_hash(myhash, hint):
+    hsh = myhash[hint]
+    if DEBUG <= 0:
+        return False
+    print(f"dump_hash(): {hint}")
+    for key in hsh:
+        item = hsh[key]
+        for what, cont in item.items():
+            print("@" + hint, key, what, cont)
+        print()
+    return True
 
 main()
