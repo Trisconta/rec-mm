@@ -16,9 +16,10 @@ DEF_DATA = {
 
 class Config():
     """ config -- basic reader. """
-    def __init__(self):
-        c_home = ConfigHome()
-        fname = os.path.join(c_home.home, CONF_BASE)
+    def __init__(self, bdir:str=""):
+        c_home = bdir if bdir else ConfigHome()
+        a_dir = bdir if bdir else c_home.home
+        fname = os.path.join(a_dir, CONF_BASE)
         self._fname = fname
         self._has_file, self._data = self._read_config(fname)
 
